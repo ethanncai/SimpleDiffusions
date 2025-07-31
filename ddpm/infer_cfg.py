@@ -8,16 +8,8 @@ from PIL import Image
 
 # Define condition vectors for digits 0-9
 conditions_mappings = {
-    '0': torch.tensor((1,0,0,0,0,0,0,0,0,0)).float().unsqueeze(0),
-    '1': torch.tensor((0,1,0,0,0,0,0,0,0,0)).float().unsqueeze(0),
-    '2': torch.tensor((0,0,1,0,0,0,0,0,0,0)).float().unsqueeze(0),
-    '3': torch.tensor((0,0,0,1,0,0,0,0,0,0)).float().unsqueeze(0),
-    '4': torch.tensor((0,0,0,0,1,0,0,0,0,0)).float().unsqueeze(0),
-    '5': torch.tensor((0,0,0,0,0,1,0,0,0,0)).float().unsqueeze(0),
-    '6': torch.tensor((0,0,0,0,0,0,1,0,0,0)).float().unsqueeze(0),
-    '7': torch.tensor((0,0,0,0,0,0,0,1,0,0)).float().unsqueeze(0),
-    '8': torch.tensor((0,0,0,0,0,0,0,0,1,0)).float().unsqueeze(0),
-    '9': torch.tensor((0,0,0,0,0,0,0,0,0,1)).float().unsqueeze(0),
+    str(i): torch.nn.functional.one_hot(torch.tensor(i), num_classes=10).float().unsqueeze(0)
+    for i in range(10)
 }
 
 def parse_args():
