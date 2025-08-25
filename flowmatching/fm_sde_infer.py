@@ -5,7 +5,7 @@ import numpy as np
 from model_dit import SimpleDiTConditional
 from PIL import Image
 import torchvision.utils as vutils
-
+import math
 # 条件向量（不变）
 conditions_mappings = {
     str(i): torch.nn.functional.one_hot(torch.tensor(i), num_classes=10).float().unsqueeze(0)
@@ -21,12 +21,12 @@ def parse_args():
     parser.add_argument('--img_size', type=int, default=32, help='Image size (default: 32)')
     parser.add_argument('--channels', type=int, default=1, help='Number of image channels (default: 1)')
     parser.add_argument('--seed', type=int, default=1, help='Random seed for reproducibility')
-    parser.add_argument('--fm_steps', type=int, default=100, help='Steps for flow matching')
+    parser.add_argument('--fm_steps', type=int, default=50, help='Steps for flow matching')
     parser.add_argument('--sde_noise_scale', type=float, default=1, help='SDE noise scale parameter a (default: 0.1)')
     parser.add_argument('--num_generated', type=int, default=1, help='Number of images to generate (default: 1)')
     return parser.parse_args()
 
-def sde_step(t,dt,v,sde_noise_scale,device):
+def sde_step(x,t,dt,v,sde_noise_scale,device):
     t_int = t[0].item()
     sigma_t = sde_noise_scale * torch.sqrt((1-t) / (t + 1e-5))
     drift_correction = (sigma_t**2 / (2 * t_int + 1e-5)) * (x + (1 - t_int) * v) * dt
@@ -52,7 +52,7 @@ def infer_flow_matching_cfg(model, x_0, condition, guidance_scale=3.0, fm_steps=
             v = v_uncond + guidance_scale * (v_cond - v_uncond)
             
             # sde stepping
-            x = sde_step(t,dt,v,sde_noise_scale,device)
+            x = sde_step(x,t,dt,v,sde_noise_scale,device)
 
     return x
 
