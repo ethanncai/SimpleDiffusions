@@ -116,7 +116,7 @@ class TransformerBlock(nn.Module):
         return x
     
 
-class SimpleDiTConditional(nn.Module):
+class SequentiallyExtendedDiT(nn.Module):
     """
     A simplified Diffusion Transformer (DiT) architecture.
     """
@@ -127,11 +127,13 @@ class SimpleDiTConditional(nn.Module):
                  patch_size=4,
                  embed_dim=768,
                  label_condition_dim=10,
+                 color_label_condition_dim=3,
                  depth=6,
                  heads=12,
                  mlp_ratio=4,
                  time_emb_dim=32,
-                 cfg_dropout=0.1):
+                 cfg_dropout=0.1,
+                 ):
         super().__init__()
         
         # Store parameters
@@ -145,6 +147,7 @@ class SimpleDiTConditional(nn.Module):
 
         # for condition embedding
         self.label_condition_mlp = nn.Linear(label_condition_dim, embed_dim)
+        self.color_label_condition_mlp = nn.Linear(color_label_condition_dim, embed_dim)
         
         # Check if image size is valid for the patch size
         assert self.img_height % patch_size == 0, f"Image height must be divisible by patch_size {patch_size}"
@@ -174,12 +177,19 @@ class SimpleDiTConditional(nn.Module):
             TransformerBlock(embed_dim, heads, embed_dim // heads, mlp_ratio, 0.1)
             for _ in range(depth)
         ])
+        # Note that we used short_circuit_init = True when initalizing extended blocks
+        self.extended_blocks = nn.ModuleList([
+            TransformerBlock(embed_dim, heads, embed_dim // heads, mlp_ratio, 0.1,short_circuit_init=True)
+            for _ in range(depth)
+        ])
         
         # Output projection to image space
         self.norm = nn.LayerNorm(embed_dim)
         self.to_pixels = nn.Linear(embed_dim, patch_size * patch_size * self.out_dim)
         
-    def forward(self, x,  timestep, condition, force_drop_condition=False):
+    def forward(self, x,  timestep, conditions, force_drop_condition=False):
+
+        label_condition, color_label_condition = conditions
         # Check input shape
         _, c, h, w = x.shape
         if c != self.image_channels:
@@ -195,19 +205,30 @@ class SimpleDiTConditional(nn.Module):
         x += addictive_condition
         
         # Dropping condition
-        if True:
-            if condition is not None:
-                condition = condition.float()
-                # c -> [B, condition_dim]
-                drop_mask = torch.rand(condition.shape[0], device=condition.device) < self.cfg_dropout
-                condition = condition.clone()
-                condition[drop_mask] = 0  # Set dropped conditions to zero, looks like assign a single 0, but it actually assigns the whole vector as 0
-                # 把所有被drop mask 随机选中的 condition 向量设置为 0 
-        condition = self.label_condition_mlp(condition)
+        if self.training or force_drop_condition:
+            assert label_condition is not None and color_label_condition is not None
+            assert label_condition.shape[0] == color_label_condition.shape[0]
+            b = label_condition.shape[0]
+            label_condition = label_condition.float()
+            # c -> [B, condition_dim]
+            drop_mask = torch.rand(b, device=label_condition.device) < self.cfg_dropout
+
+            label_condition = label_condition.clone()
+            label_condition[drop_mask] = 0  # Set dropped conditions to zero, looks like assign a single 0, but it actually assigns the whole vector as 0
+            color_label_condition = color_label_condition.clone()
+            color_label_condition[drop_mask] = 0
+
+        label_condition = self.label_condition_mlp(label_condition)
+        color_label_condition = self.color_label_condition_mlp(color_label_condition)
 
         # Apply transformer blocks
-        for block in self.blocks:
-            x = block(x, t, condition)
+        # for simplicity, we assume extended_blocks and blocks have the same length
+        assert len(self.extended_blocks) == len(self.blocks), \
+            "extended_blocks and blocks must have the same length for alternating execution"
+
+        for ext_block, block in zip(self.extended_blocks, self.blocks):
+            x = ext_block(x, t, color_label_condition)  # 用 color 条件
+            x = block(x, t, label_condition)            # 用 label 条件
          
         # Normalize and convert tokens back to image
         x = self.norm(x)
@@ -225,7 +246,7 @@ class SimpleDiTConditional(nn.Module):
 if __name__ == "__main__":
     # Example 1: Default 1-channel model
     channels = 1
-    model = SimpleDiTConditional(
+    model = SequentiallyExtendedDiT(
         image_channels=channels,
         img_size=(64, 64),
         patch_size=4,
@@ -246,6 +267,7 @@ if __name__ == "__main__":
     # Random image tensor with shape [batch_size, channels, height, width]
     x = torch.randn(batch_size, channels, 64, 64).to(device)
     c = torch.randn(batch_size, 10).to(device) # float
+    c2 = torch.randn(batch_size, 3).to(device) # float
     # Random timestep tensor with shape [batch_size]
     timestep = torch.randint(0, 300, (batch_size,)).to(device)
     
@@ -253,7 +275,7 @@ if __name__ == "__main__":
     print(f"Timestep shape: {timestep.shape}")
     
     # Forward pass
-    output = model(x, timestep, c)
+    output = model(x, timestep, (c, c2))
     
     print(f"Output shape: {output.shape}")
     
