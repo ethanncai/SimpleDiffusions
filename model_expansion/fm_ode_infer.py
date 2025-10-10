@@ -16,11 +16,11 @@ conditions_mappings = {
 def get_corresponding_color_tensor(color_char):
     color_char = color_char.lower()
     if color_char == 'r':
-        return torch.tensor([1.0, -1, -1]).view(1, 3)  # Red
+        return torch.tensor([1.0, -1.0, -1.0]).view(1, 3)  # Red
     elif color_char == 'g':
-        return torch.tensor([0.0, -1, -1]).view(1, 3)  # Green
+        return torch.tensor([-1.0, 1.0, -1.0]).view(1, 3)  # Green
     elif color_char == 'b':
-        return torch.tensor([0.0, -1, -1]).view(1, 3)  # Blue
+        return torch.tensor([-1.0, -1.0, 1.0]).view(1, 3)  # Blue
     else:
         raise ValueError(f"Invalid color character '{color_char}'. Use 'r', 'g', or 'b'.")
 
@@ -37,7 +37,7 @@ def parse_args():
     parser.add_argument('--channels', type=int, default=3, help='Number of image channels (default: 1)')
     parser.add_argument('--seed', type=int, default=None, help='Random seed for reproducibility')
     parser.add_argument('--fm_steps', type=int, default=300, help='steps for flow matching')
-    parser.add_argument('--patch_size', type=int, default=4, help='Patch size for ViT (default: 4)')
+    parser.add_argument('--patch_size', type=int, default=2, help='Patch size for ViT (default: 4)')
     parser.add_argument('--label_condition_dim', type=int, default=10, help='Label condition dimension (default: 10)')
     parser.add_argument('--color_condition_dim', type=int, default=3, help='Color condition dimension (default: 3), only valid when model variation is not base')
     return parser.parse_args()
@@ -60,7 +60,7 @@ def infer_flow_matching_cfg(model, x_0, conditions, guidance_scale=3.0, fm_steps
             t = torch.full((B,), i / fm_steps, dtype=torch.float, device=device)  # 当前时间 t ∈ [0,1)
 
             # 预测有条件与无条件速度场
-            if uncond_color_condition_label is None:
+            if color_label_condition is None:
                 v_uncond = model(x, t, uncond_condition_label, force_drop_condition=True)
                 v_cond = model(x, t, label_condition)
             else:

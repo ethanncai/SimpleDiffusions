@@ -116,7 +116,7 @@ class TransformerBlock(nn.Module):
         return x
     
 
-class SequentiallyExtendedDiT(nn.Module):
+class ExtendedDiT(nn.Module):
     """
     A simplified Diffusion Transformer (DiT) architecture.
     """
@@ -133,17 +133,24 @@ class SequentiallyExtendedDiT(nn.Module):
                  mlp_ratio=4,
                  time_emb_dim=32,
                  cfg_dropout=0.1,
+                 extend_varient="sequential"
                  ):
         super().__init__()
-        
+        assert extend_varient in ['sequential','parallel']
+        self.extend_varient = extend_varient
         # Store parameters
+        
         self.image_channels = image_channels
         self.out_dim = out_dim if out_dim is not None else image_channels
         self.time_emb_dim = time_emb_dim
         self.img_height, self.img_width = img_size
         self.patch_size = patch_size
         self.embed_dim = embed_dim
-        self.cfg_dropout = cfg_dropout  
+        self.cfg_dropout = cfg_dropout
+        
+        # This module is for model extension
+        if self.extend_varient == "parallel":
+            self.alpha = nn.Parameter(torch.zeros(1))
 
         # for condition embedding
         self.label_condition_mlp = nn.Linear(label_condition_dim, embed_dim)
@@ -226,9 +233,17 @@ class SequentiallyExtendedDiT(nn.Module):
         assert len(self.extended_blocks) == len(self.blocks), \
             "extended_blocks and blocks must have the same length for alternating execution"
 
-        for ext_block, block in zip(self.extended_blocks, self.blocks):
-            x = ext_block(x, t, color_label_condition)  # 用 color 条件
-            x = block(x, t, label_condition)            # 用 label 条件
+        if self.extend_varient == "sequential":
+            for ext_block, block in zip(self.extended_blocks, self.blocks):
+                x = ext_block(x, t, color_label_condition)  # 用 color 条件
+                x = block(x, t, label_condition)            # 用 label 条件
+        elif self.extend_varient == "parallel":
+            for ext_block, block in zip(self.extended_blocks, self.blocks):
+                x_extended = ext_block(x, t, color_label_condition)  # 用 color 条件
+                x_base = block(x, t, label_condition)            # 用 label 条件
+                x = x_base + self.alpha * x_extended
+
+        
          
         # Normalize and convert tokens back to image
         x = self.norm(x)

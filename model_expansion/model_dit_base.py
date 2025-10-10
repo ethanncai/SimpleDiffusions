@@ -127,7 +127,7 @@ class BaseDiT(nn.Module):
                  patch_size=4,
                  embed_dim=768,
                  label_condition_dim=10,
-                 depth=6,
+                 depth=3,
                  heads=12,
                  mlp_ratio=4,
                  time_emb_dim=32,
@@ -230,7 +230,7 @@ if __name__ == "__main__":
         img_size=(64, 64),
         patch_size=4,
         embed_dim=768,
-        depth=24,
+        depth=3,
         heads=12,
         label_condition_dim=10,
         
