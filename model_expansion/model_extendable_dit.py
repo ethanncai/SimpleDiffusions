@@ -22,6 +22,36 @@ class SinusoidalPositionEmbeddings(nn.Module):
         embeddings = torch.cat((embeddings.sin(), embeddings.cos()), dim=-1)
         return embeddings
 
+class AbsolutePositionEmbedding(nn.Module):
+    """2D Absolute Position Embedding using sinusoidal encoding"""
+    def __init__(self, embed_dim, height, width):
+        super().__init__()
+        self.embed_dim = embed_dim
+        self.height = height
+        self.width = width
+        
+        # Create position encoding
+        pe = torch.zeros(height * width, embed_dim)
+        
+        # Create position indices
+        position = torch.arange(0, height * width).unsqueeze(1).float()
+        
+        # Create encoding dimensions
+        div_term = torch.exp(torch.arange(0, embed_dim, 2).float() * 
+                           -(math.log(10000.0) / embed_dim))
+        
+        # Apply sin to even indices
+        pe[:, 0::2] = torch.sin(position * div_term)
+        # Apply cos to odd indices  
+        pe[:, 1::2] = torch.cos(position * div_term)
+        
+        # Reshape to (1, height*width, embed_dim) and register as buffer
+        pe = pe.unsqueeze(0)
+        self.register_buffer('pe', pe)
+    
+    def forward(self):
+        return self.pe
+
 class PatchEmbedding(nn.Module):
     def __init__(self, image_channels, embed_dim, patch_size=4):
         super().__init__()
@@ -116,35 +146,46 @@ class TransformerBlock(nn.Module):
         return x
     
 
-class BaseDiT(nn.Module):
+class ExtendableDiT(nn.Module):
     """
     A simplified Diffusion Transformer (DiT) architecture.
     """
     def __init__(self, 
-                 image_channels=1,
+                 image_channels=3,
                  out_dim=None,
                  img_size=(32, 32),
-                 patch_size=4,
-                 embed_dim=768,
+                 patch_size=2,
+                 embed_dim=512,
                  label_condition_dim=10,
-                 depth=3,
-                 heads=12,
+                 color_label_condition_dim=3,
+                 depth=6,
+                 heads=16,
                  mlp_ratio=4,
                  time_emb_dim=32,
-                 cfg_dropout=0.1):
+                 cfg_dropout=0.1,
+                 model_variant="sequential"
+                 ):
         super().__init__()
-        
+        assert model_variant in ['base','sequential','parallel']
+        self.model_varient = model_variant
         # Store parameters
+        
         self.image_channels = image_channels
         self.out_dim = out_dim if out_dim is not None else image_channels
         self.time_emb_dim = time_emb_dim
         self.img_height, self.img_width = img_size
         self.patch_size = patch_size
         self.embed_dim = embed_dim
-        self.cfg_dropout = cfg_dropout  
+        self.cfg_dropout = cfg_dropout
+        
+        # This module is for model extension
+        if self.model_varient == "parallel":
+            self.alpha = nn.Parameter(torch.zeros(1))
 
         # for condition embedding
         self.label_condition_mlp = nn.Linear(label_condition_dim, embed_dim)
+        if self.model_varient != 'base':
+            self.color_label_condition_mlp = nn.Linear(color_label_condition_dim, embed_dim)
         
         # Check if image size is valid for the patch size
         assert self.img_height % patch_size == 0, f"Image height must be divisible by patch_size {patch_size}"
@@ -166,20 +207,29 @@ class BaseDiT(nn.Module):
         # Patch embedding
         self.patch_embed = PatchEmbedding(image_channels, embed_dim, patch_size)
         
-        # Just a simple parameter position embedding inspired by ViT
-        self.pos_embed = nn.Parameter(torch.randn(1, self.num_patches, embed_dim) * 0.02)
+        # Absolute position embedding using sinusoidal encoding
+        self.pos_embed = AbsolutePositionEmbedding(embed_dim, self.h_patches, self.w_patches)
         
         # Transformer blocks
         self.blocks = nn.ModuleList([
             TransformerBlock(embed_dim, heads, embed_dim // heads, mlp_ratio, 0.1)
             for _ in range(depth)
         ])
+        # Note that we used short_circuit_init = True when initalizing extended blocks
+        
+        if self.model_varient != 'base':
+            self.extended_blocks = nn.ModuleList([
+                TransformerBlock(embed_dim, heads, embed_dim // heads, mlp_ratio, 0.1,short_circuit_init=True)
+                for _ in range(depth)
+            ])
         
         # Output projection to image space
         self.norm = nn.LayerNorm(embed_dim)
         self.to_pixels = nn.Linear(embed_dim, patch_size * patch_size * self.out_dim)
         
-    def forward(self, x,  timestep, condition, force_drop_condition=False):
+    def forward(self, x,  timestep, conditions, force_drop_condition=False):
+
+        label_condition, color_label_condition = conditions
         # Check input shape
         _, c, h, w = x.shape
         if c != self.image_channels:
@@ -190,24 +240,45 @@ class BaseDiT(nn.Module):
         t = self.time_embedding(timestep)  # t: from [B] to [B, embed_dim]
         x, (H, W) = self.patch_embed(x)  # x: from [B, C, H, W] to [B, num_patches, embed_dim]
         
-        # shape of pos_embed: [1, embed_dim] addictive condition
-        addictive_condition = self.pos_embed + t.unsqueeze(1) 
+        # Get absolute position embeddings and add time condition
+        pos_embed = self.pos_embed()  # [1, num_patches, embed_dim]
+        addictive_condition = pos_embed + t.unsqueeze(1) 
         x += addictive_condition
         
         # Dropping condition
-        if True:
-            if condition is not None:
-                condition = condition.float()
-                # c -> [B, condition_dim]
-                drop_mask = torch.rand(condition.shape[0], device=condition.device) < self.cfg_dropout
-                condition = condition.clone()
-                condition[drop_mask] = 0  # Set dropped conditions to zero, looks like assign a single 0, but it actually assigns the whole vector as 0
-                # 把所有被drop mask 随机选中的 condition 向量设置为 0 
-        condition = self.label_condition_mlp(condition)
+        if self.training or force_drop_condition:
+
+            b = label_condition.shape[0]
+            label_condition = label_condition.float()
+            # c -> [B, condition_dim]
+            drop_mask = torch.rand(b, device=label_condition.device) < self.cfg_dropout
+
+            label_condition = label_condition.clone()
+            label_condition[drop_mask] = 0  # Set dropped conditions to zero, looks like assign a single 0, but it actually assigns the whole vector as 0
+
+            if self.model_varient != 'base':
+                color_label_condition = color_label_condition.clone()
+                color_label_condition[drop_mask] = 0
+
+        label_condition = self.label_condition_mlp(label_condition)
+        if self.model_varient != 'base':
+            color_label_condition = self.color_label_condition_mlp(color_label_condition)
 
         # Apply transformer blocks
-        for block in self.blocks:
-            x = block(x, t, condition)
+        # for simplicity, we assume extended_blocks and blocks have the same length
+
+        if self.model_varient == "sequential":
+            for ext_block, block in zip(self.extended_blocks, self.blocks):
+                x = ext_block(x, t, color_label_condition)  # 用 color 条件
+                x = block(x, t, label_condition)            # 用 label 条件
+        elif self.model_varient == "parallel":
+            for ext_block, block in zip(self.extended_blocks, self.blocks):
+                x_extended = ext_block(x, t, color_label_condition)  # 用 color 条件
+                x_base = block(x, t, label_condition)            # 用 label 条件
+                x = x_base + self.alpha * x_extended
+        else: # base
+            for block in self.blocks:
+                x = block(x, t, label_condition)
          
         # Normalize and convert tokens back to image
         x = self.norm(x)
@@ -224,17 +295,10 @@ class BaseDiT(nn.Module):
 
 if __name__ == "__main__":
     # Example 1: Default 1-channel model
-    channels = 1
-    model = BaseDiT(
-        image_channels=channels,
-        img_size=(64, 64),
-        patch_size=4,
-        embed_dim=768,
-        depth=3,
-        heads=12,
-        label_condition_dim=10,
-        
+    model = ExtendableDiT(
+        model_variant="base"
     ).to(device)
+    
     print("\nExample 1: Single-channel model")
     print("Num params: ", sum(p.numel() for p in model.parameters()))
     print(f"Configured image size: {model.img_height}x{model.img_width}")
@@ -244,8 +308,9 @@ if __name__ == "__main__":
     batch_size = 16
     
     # Random image tensor with shape [batch_size, channels, height, width]
-    x = torch.randn(batch_size, channels, 64, 64).to(device)
+    x = torch.randn(batch_size, 3, 32, 32).to(device)
     c = torch.randn(batch_size, 10).to(device) # float
+    c2 = torch.randn(batch_size, 3).to(device) # float
     # Random timestep tensor with shape [batch_size]
     timestep = torch.randint(0, 300, (batch_size,)).to(device)
     
@@ -253,7 +318,6 @@ if __name__ == "__main__":
     print(f"Timestep shape: {timestep.shape}")
     
     # Forward pass
-    output = model(x, timestep, c)
+    output = model(x, timestep, (c, c2))
     
     print(f"Output shape: {output.shape}")
-    

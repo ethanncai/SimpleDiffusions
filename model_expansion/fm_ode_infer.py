@@ -2,8 +2,7 @@ import torch
 import matplotlib.pyplot as plt
 import argparse
 import numpy as np
-from model_dit_ext_sequential import SequentiallyExtendedDiT
-from model_dit_base import BaseDiT
+from model_extendable_dit import ExtendableDiT
 # from noise_scheduler import NoiseScheduler
 from PIL import Image
 
@@ -52,7 +51,9 @@ def infer_flow_matching_cfg(model, x_0, conditions, guidance_scale=3.0, fm_steps
     B = x.shape[0]
     dt = 1.0 / fm_steps  # 每一步的时间间隔
     uncond_condition_label = torch.zeros_like(label_condition).to(device)
-    if color_label_condition is not None:
+    if color_label_condition is None:
+        uncond_color_condition_label = None
+    else:
         uncond_color_condition_label = torch.zeros_like(color_label_condition).to(device)
 
     with torch.no_grad():
@@ -60,12 +61,8 @@ def infer_flow_matching_cfg(model, x_0, conditions, guidance_scale=3.0, fm_steps
             t = torch.full((B,), i / fm_steps, dtype=torch.float, device=device)  # 当前时间 t ∈ [0,1)
 
             # 预测有条件与无条件速度场
-            if color_label_condition is None:
-                v_uncond = model(x, t, uncond_condition_label, force_drop_condition=True)
-                v_cond = model(x, t, label_condition)
-            else:
-                v_uncond = model(x, t, (uncond_condition_label, uncond_color_condition_label), force_drop_condition=True)
-                v_cond = model(x, t, (label_condition, color_label_condition))
+            v_uncond = model(x, t, (uncond_condition_label, uncond_color_condition_label), force_drop_condition=True)
+            v_cond = model(x, t, (label_condition, color_label_condition))
 
             v = v_uncond + guidance_scale * (v_cond - v_uncond)
             x = x + v * dt
@@ -90,21 +87,14 @@ def main():
         label_color_condition = None
 
     # get model according to args
-    if args.model_variation == 'base':
-        model = BaseDiT(
-            img_size=(args.img_size, args.img_size),
-            image_channels=args.channels,  # now 3 for RGB
-            patch_size=args.patch_size,
-            label_condition_dim=args.label_condition_dim
-        ).to(device)
-    elif args.model_variation == 'sequential':
-        model = SequentiallyExtendedDiT(
-            img_size=(args.img_size, args.img_size),
-            image_channels=args.channels,  # now 3 for RGB
-            patch_size=args.patch_size,
-            label_condition_dim=args.label_condition_dim,
-            color_label_condition_dim=args.color_condition_dim
-        ).to(device)
+    model = ExtendableDiT(
+        img_size=(args.img_size, args.img_size),
+        image_channels=args.channels,  # now 3 for RGB
+        patch_size=args.patch_size,
+        label_condition_dim=args.label_condition_dim,
+        color_label_condition_dim=args.color_condition_dim,
+        model_variant=args.model_variation
+    ).to(device)
     
     model.load_state_dict(torch.load(args.ckpt, map_location=device),strict=False)
     model.eval()
