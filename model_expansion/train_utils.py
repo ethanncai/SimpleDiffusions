@@ -34,7 +34,7 @@ def generate_comprehensive_visualization(model, args, device, global_step, save_
     
     total_samples = len(all_conditions)  # 30
     
-    print(f"Generating {total_samples} images in batch...")
+    # print(f"Generating {total_samples} images in batch...")
     
     # 创建批量噪声 (30, channels, img_size, img_size)
     x_t_batch = torch.randn((total_samples, args.channels, args.img_size, args.img_size), device=device)
@@ -43,9 +43,9 @@ def generate_comprehensive_visualization(model, args, device, global_step, save_
     sample_label_condition = conditions_mappings[labels[0]]  # 获取样本条件
     sample_color_condition = get_corresponding_color_tensor(colors[0]) if args.model_variation != 'base' else None
     
-    print(f"Sample label condition shape: {sample_label_condition.shape}")
-    if sample_color_condition is not None:
-        print(f"Sample color condition shape: {sample_color_condition.shape}")
+    # print(f"Sample label condition shape: {sample_label_condition.shape}")
+    # if sample_color_condition is not None:
+    #     print(f"Sample color condition shape: {sample_color_condition.shape}")
     
     # 准备批量条件
     batch_label_conditions = []
@@ -71,24 +71,19 @@ def generate_comprehensive_visualization(model, args, device, global_step, save_
     else:
         batch_color_conditions = None
     
-    print(f"Batch label conditions shape: {batch_label_conditions.shape}")
-    if batch_color_conditions is not None:
-        print(f"Batch color conditions shape: {batch_color_conditions.shape}")
+    # print(f"Batch label conditions shape: {batch_label_conditions.shape}")
+    # if batch_color_conditions is not None:
+    #     print(f"Batch color conditions shape: {batch_color_conditions.shape}")
     
     # 检查维度并确保正确的格式
     # 如果标签条件是1D的，需要确保它有正确的批量维度
     batch_label_conditions = batch_label_conditions.squeeze(1)
     
     if batch_color_conditions is not None:
-        if batch_color_conditions.dim() == 2:
-            # 应该是 (batch_size, condition_dim)，这是正确的
-            pass
-        elif batch_color_conditions.dim() == 1:
-            # 如果是1D的，需要添加条件维度
-            batch_color_conditions = batch_color_conditions.unsqueeze(-1)
+        batch_color_conditions= batch_color_conditions.squeeze(1)
     
     # 批量推理
-    print("Running batch inference...")
+    # print("Running batch inference...")
     with torch.no_grad():
         # print(batch_label_conditions.shape)
         # print(x_t_batch.shape)
@@ -99,7 +94,7 @@ def generate_comprehensive_visualization(model, args, device, global_step, save_
             fm_steps=50
         )
     
-    print("Batch inference completed, creating visualization...")
+    # print("Batch inference completed, creating visualization...")
     
     # 创建3x10的网格图像
     fig, axes = plt.subplots(3, 10, figsize=(20, 6))
@@ -140,7 +135,7 @@ def generate_comprehensive_visualization(model, args, device, global_step, save_
     vis_img_path = os.path.join(save_path, f"comprehensive_vis_{timestamp}_step_{global_step}.jpg")
     plt.savefig(vis_img_path, bbox_inches='tight', pad_inches=0.1, dpi=150)
     plt.close()
-    print(f"Saved comprehensive visualization to {vis_img_path}")
+    # print(f"Saved comprehensive visualization to {vis_img_path}")
     
     # 为TensorBoard创建单个网格图像
     grid_h, grid_w = 3, 10
