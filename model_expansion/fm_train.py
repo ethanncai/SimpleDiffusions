@@ -34,7 +34,8 @@ def parse_args():
     parser.add_argument('--label_condition_dim', type=int, default=10, help='Label condition dimension (default: 10)')
     parser.add_argument('--color_condition_dim', type=int, default=3, help='Color condition dimension (default: 3), only valid when model variation is not base')
     parser.add_argument('--channels', type=int, default=3, help='Number of image channels (default: 3)')
-    parser.add_argument('--visualize_freq', type=int, default=500, help='Visualize and save image every N steps (0 to disable)')
+    parser.add_argument('--visualize_freq', type=int, default=50000, help='Visualize and save image every N steps (0 to disable)')
+    parser.add_argument('--only_enable_extended_grad', action='store_true', help='Only enable gradients for extended blocks')
 
     return parser.parse_args()
 
@@ -75,8 +76,29 @@ def train(args):
     if args.ckpt:
         print(f"Loading checkpoint from {args.ckpt}")
         model.load_state_dict(torch.load(args.ckpt, map_location=device), strict=False)
+        
+    # === Gradient control: freeze all, then unfreeze extended_blocks ===
+    if args.only_enable_extended_grad:
+        # Freeze entire model
+        for param in model.parameters():
+            param.requires_grad = False
+        # Unfreeze extended_blocks only
+        if hasattr(model, 'extended_blocks'):
+            for param in model.extended_blocks.parameters():
+                param.requires_grad = True
+            print("Only extended_blocks gradients enabled.")
+        else:
+            print("All grad enabled")
 
-    optimizer = Adam(model.parameters(), lr=args.lr)
+    # === Optimizer: only include parameters that require grad ===
+    trainable_params = [p for p in model.parameters() if p.requires_grad]
+    if len(trainable_params) == 0:
+        raise ValueError("No trainable parameters! Check your gradient settings.")
+    else:
+        total_trainable_params = sum(p.numel() for p in trainable_params)
+        print(f"Total trainable parameters: {total_trainable_params:,}")
+            
+    optimizer = Adam(trainable_params, lr=args.lr)
     scheduler = StepLR(optimizer, step_size=args.lr_decay_step, gamma=args.lr_decay_rate)
     
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -121,7 +143,8 @@ def train(args):
             optimizer.step()
             
             total_loss += loss.item()
-            writer.add_scalar('Loss/batch', loss.item(), global_step)
+            if global_step % 1000 == 0:
+                writer.add_scalar('Loss/batch', loss.item(), global_step)
             
             # ========== 调用外部可视化函数 ==========
             if args.visualize_freq > 0 and global_step % args.visualize_freq == 0:

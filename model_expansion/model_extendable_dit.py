@@ -158,7 +158,7 @@ class ExtendableDiT(nn.Module):
                  embed_dim=768,
                  label_condition_dim=10,
                  color_label_condition_dim=3,
-                 depth=3,
+                 depth=64,
                  heads=8,
                  mlp_ratio=4,
                  time_emb_dim=32,
@@ -203,7 +203,7 @@ class ExtendableDiT(nn.Module):
             nn.ReLU(),
             nn.Linear(time_emb_dim, embed_dim)
         )
-        
+                                                                                      
         # Patch embedding
         self.patch_embed = PatchEmbedding(image_channels, embed_dim, patch_size)
         
@@ -296,7 +296,7 @@ class ExtendableDiT(nn.Module):
 if __name__ == "__main__":
     # Example 1: Default 1-channel model
     model = ExtendableDiT(
-        model_variant="base"
+        model_variant="sequential"
     ).to(device)
     
     print("\nExample 1: Single-channel model")
